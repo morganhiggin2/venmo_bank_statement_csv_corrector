@@ -1,4 +1,6 @@
 use std::env;
+use std::fmt::write;
+use std::process::Output;
 use std::{fs::{File, read_dir}, io};
 use polars::frame::DataFrame;
 use polars::io::{SerReader, SerWriter};
@@ -9,7 +11,7 @@ const INPUT_DIR: &str = "input";
 const OUTPUT_DIR: &str = "output";
 
 fn main() {
-    read_input_files();
+    let dataframes = read_input_files().unwrap();
 }
 
 /*
@@ -39,13 +41,12 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
     for file_path in input_files {
         //TODO Delete
         let file_path_string = file_path.clone().into_os_string().into_string().unwrap();
-        println!("{file_path_string}");
 
         //build polars csv reader
         let csv_reader = match CsvReader::from_path(file_path) {
             Ok(builder) => {
                 builder
-                .with_skip_rows(4)
+                .with_skip_rows(2)
                 .has_header(true)
             }
             Err(e) => {
@@ -62,16 +63,7 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
         };
 
         //create output file path
-        let mut output_file_path = OUTPUT_DIR.to_owned();
-        output_file_path.push_str("output_file.csv");
-
-        //create file for output
-        let mut output_file: File = match File::create(output_file_path) {
-            Ok(some) => some,
-            Err(e) => {
-                return Err(format!("Error creating output file: {}", e));
-            }
-        };
+        let mut output_file = get_output_file_buffer("output_file.csv".to_string())?; 
 
         //build csv file writer
         let mut csv_writer = CsvWriter::new(&mut output_file)
@@ -90,6 +82,7 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
     return Ok(dataframes);
 }
 
+/* Read input directory, get list of files in input directory */
 fn read_input_dir() -> io::Result<Vec<PathBuf>> {
     //get directory path to read input files
     let mut read_dir_path: String = "./".to_string(); 
@@ -103,4 +96,24 @@ fn read_input_dir() -> io::Result<Vec<PathBuf>> {
     return io::Result::Ok(files_in_dir);
 }
 
+/*
+create output file buffer
+*/
+fn get_output_file_buffer(output_file_name: String) -> Result<File, String> {
+    //get output file path
+    let mut write_file_path: String = "./".to_string(); 
+    write_file_path.push_str(OUTPUT_DIR);
+    write_file_path.push_str("/");
+    write_file_path.push_str(&output_file_name);
+
+    //write file
+    let output_file: File = match File::create(write_file_path) {
+        Ok(some) => some,
+        Err(e) => {
+            return Err(format!("Error creating output file: {}", e));
+        }
+    };
+
+    return Ok(output_file);
+}
 //TODO if directory does not exist, create it
