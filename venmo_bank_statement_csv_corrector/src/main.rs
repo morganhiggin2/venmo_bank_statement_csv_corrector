@@ -1,10 +1,12 @@
 use std::env;
-use std::{fs, io};
+use std::{fs::{File, read_dir}, io};
 use polars::frame::DataFrame;
+use polars::io::{SerReader, SerWriter};
 use polars::prelude::{CsvReader, CsvWriter};
 use std::path::PathBuf;
 
 const INPUT_DIR: &str = "input";
+const OUTPUT_DIR: &str = "output";
 
 fn main() {
     read_input_files();
@@ -36,18 +38,54 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
     //for each file
     for file_path in input_files {
         //TODO Delete
-        let file_path_string = file.into_os_string().into_string().unwrap();
+        let file_path_string = file_path.clone().into_os_string().into_string().unwrap();
         println!("{file_path_string}");
 
         //build polars csv reader
-        let csv_reader = CsvReader::from_path(file_path)?
-            .with_skip_rows(4);
+        let csv_reader = match CsvReader::from_path(file_path) {
+            Ok(builder) => {
+                builder
+                .with_skip_rows(4)
+                .has_header(true)
+            }
+            Err(e) => {
+                return Err(format!("Error during building csv reader: {}", e.to_string()));
+            }
+        };
+
+        //parse csv file
+        let mut dataframe = match csv_reader.finish() {
+            Ok(some) => some,
+            Err(e) => {
+                return Err(format!("Error during parsing csv file {} with error {}", file_path_string, e.to_string()));
+            }
+        };
+
+        //create output file path
+        let mut output_file_path = OUTPUT_DIR.to_owned();
+        output_file_path.push_str("output_file.csv");
+
+        //create file for output
+        let mut output_file: File = match File::create(output_file_path) {
+            Ok(some) => some,
+            Err(e) => {
+                return Err(format!("Error creating output file: {}", e));
+            }
+        };
+
+        //build csv file writer
+        let mut csv_writer = CsvWriter::new(&mut output_file)
+            .include_header(true)
+            .with_datetime_format(Some("".to_string()));
+
+        //write csv file to output location
+        match csv_writer.finish(&mut dataframe) {
+            Ok(_) => (),
+            Err(e) => {
+                return Err(format!("Error writing dataframe to output file {}", e.to_string()));
+            }
+        };
     }
-        //read contents
-
-        //convert contents to loosely structured json
-
-        //append to list of file json contents
 
     return Ok(dataframes);
 }
@@ -58,9 +96,11 @@ fn read_input_dir() -> io::Result<Vec<PathBuf>> {
     read_dir_path.push_str(INPUT_DIR);
 
     //read files in input directory
-    let files_in_dir = fs::read_dir(read_dir_path)?
+    let files_in_dir = read_dir(read_dir_path)?
         .map(|res| res.map(|e| e.path()))
         .collect::<Result<Vec<_>, io::Error>>()?;
 
     return io::Result::Ok(files_in_dir);
 }
+
+//TODO if directory does not exist, create it
