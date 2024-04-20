@@ -1,10 +1,11 @@
 use std::env;
 use std::fmt::write;
 use std::process::Output;
+use std::collections::hash_map;
 use std::{fs::{File, read_dir}, io};
 use polars::frame::DataFrame;
 use polars::io::{SerReader, SerWriter};
-use polars::prelude::{CsvReader, CsvWriter};
+use polars::prelude::*;
 use std::path::PathBuf;
 
 const INPUT_DIR: &str = "input";
@@ -62,6 +63,90 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
             }
         };
 
+        //get dataframe columns
+        let dataframe_columns = dataframe.get_columns();
+
+        //create hashmap of column name to column reference 
+        let mut dataframe_column_search = hash_map::HashMap::new();
+
+        {
+            //populate hashmap
+            for column in dataframe_columns {
+                dataframe_column_search.insert(column.name(), column);
+            } 
+        }
+
+        //new dataframe with correct data
+        let mut corrected_dataframe = DataFrame::empty();
+
+        //create dataframe with column ID
+        //<Series as Clone>::clone(&some)
+        {
+            let id_column: Series = match dataframe_column_search.get("ID") {
+                Some(val) => Series::new("Tracking1", val.to_owned()),
+                None => {
+                    return Err("Unable to fetch column ID from original database".to_string());
+                }
+            };
+
+            corrected_dataframe = match DataFrame::new(vec![id_column]) {
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Unable to create dataframe with Tracking1 column: {}", e));
+                }
+            };
+        }
+
+        //add correct date column, with correct format
+        {
+            //get owned date column
+            let date_column = match dataframe_column_search.get("Datetime") {
+                Some(val) => Series::new("Tracking1", val.to_owned()),
+                None => {
+                    return Err("Could not find column Datetime in original dataframe".to_string());
+                }
+            };
+
+            //Only keep first 10 slices of string
+            let date_column: Series = date_column
+                .str()
+                .unwrap() 
+                .into_iter()
+                .map(|chunkedarray| 
+                    match chunkedarray
+                    {
+                        //attempt to get first 10 chars
+                        Some(val) => match val.get(..10) 
+                            {
+                                Some(val) => val, 
+                                //if none, return what we have
+                                None => val
+                            },
+                        //if no str value, return empty string
+                        None => "".into()
+                    })
+                .collect();
+
+            //convert Datetime column date format, and back into str
+            let date_col = match date_column.str().unwrap().as_date(Some("%Y-%m-%d"), true) {
+                Ok(some) => some.into_series(),
+                Err(e) => {
+                    return Err(format!("Error converting Datetime column from date to strimg: {}", e));
+                }
+            };
+
+            //set date column name
+            let date_col = date_col.with_name("Date");
+
+            match corrected_dataframe.insert_column(0, date_col) {
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Unable to insert new column Date: {}", e));
+                }
+            };
+        }
+
+        //TODO after transformation, seperate, merge files then do transform, then write, in seperate method calls
         //create output file path
         let mut output_file = get_output_file_buffer("output_file.csv".to_string())?; 
 
@@ -71,7 +156,7 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
             .with_datetime_format(Some("".to_string()));
 
         //write csv file to output location
-        match csv_writer.finish(&mut dataframe) {
+        match csv_writer.finish(&mut corrected_dataframe) {
             Ok(_) => (),
             Err(e) => {
                 return Err(format!("Error writing dataframe to output file {}", e.to_string()));
