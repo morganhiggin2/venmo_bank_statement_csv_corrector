@@ -41,11 +41,8 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
 
     //for each file
     for file_path in input_files {
-        //TODO Delete
-        let file_path_string = file_path.clone().into_os_string().into_string().unwrap();
-
         //build polars csv reader
-        let csv_reader = match CsvReader::from_path(file_path) {
+        let csv_reader = match CsvReader::from_path(file_path.clone()) {
             Ok(builder) => {
                 builder
                 .with_skip_rows(2)
@@ -60,7 +57,7 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
         let mut dataframe = match csv_reader.finish() {
             Ok(some) => some,
             Err(e) => {
-                return Err(format!("Error during parsing csv file {} with error {}", file_path_string, e.to_string()));
+                return Err(format!("Error during parsing csv file with error {}", e.to_string()));
             }
         };
 
@@ -142,13 +139,13 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
             let date_column = date_column
                 .date()
                 .unwrap()
-                .to_string("%Y/%m/%d")
+                .to_string("%d/%m/%Y")
                 .into_series();
 
             //set date column name
             let date_column = date_column.with_name("Date");
 
-            match corrected_dataframe.insert_column(0, date_column) {
+            match corrected_dataframe.insert_column(1, date_column) {
                 Ok(some) => some,
                 Err(e) => {
                     return Err(format!("Unable to insert new column Date: {}", e));
@@ -216,6 +213,7 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
             let amount_tip= match amount_tip.cast(&DataType::Float32) {
                 Ok(some) => some,
                 Err(e) => {
+                    println!("here");
                     return Err(format!("Could not cast amount_tip column to f32 type: {}", e));
                 }
             };
@@ -232,6 +230,34 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
                 }
             };
 
+            //replace null values in float columns with 0
+            let amount_total = match amount_total.fill_null(FillNullStrategy::Zero) {
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Could not fill null values in column amount_total with 0: {}", e));
+                }
+            };
+            
+            let amount_tip = match amount_tip.fill_null(FillNullStrategy::Zero) {
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Could not fill null values in column amount_tip with 0: {}", e));
+                }
+            };
+            
+            let amount_tax = match amount_tax.fill_null(FillNullStrategy::Zero) {
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Could not fill null values in column amount_tax with 0: {}", e));
+                }
+            };
+            
+            let amount_fee = match amount_fee.fill_null(FillNullStrategy::Zero) {
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Could not fill null values in column amount_fee with 0: {}", e));
+                }
+            }; 
 
             //get correct amount
             let amount_correct = amount_total + amount_tip + amount_tax + amount_fee;
@@ -239,29 +265,117 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
             //set column name
             let amount_correct = amount_correct.with_name("Amount");
 
-            match corrected_dataframe.insert_column(0, amount_correct) {
+            match corrected_dataframe.insert_column(2, amount_correct) {
                 Ok(some) => some,
                 Err(e) => {
                     return Err(format!("Error inserting column amount_total into corrected dataframe: {}", e));
                 }
             };
-
-            //get Payee
-            //let payee_column = dataframe_column_search.get("Pay")
-
-            //Description, maybe include from to in here depending on how it is
-
-            //get amount
         }
 
-        //TODO after transformation, seperate, merge files then do transform, then write, in seperate method calls
+        //get payee
+        {
+            //get owned date column
+            let payee_column = match dataframe_column_search.get("From") {
+                Some(val) => Series::new("Payee", val.to_owned()),
+                None => {
+                    return Err("Could not find column From in original dataframe".to_string());
+                }
+            };
+
+            //insert into corrected dataframe
+            match corrected_dataframe.insert_column(3, payee_column) {
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Error inserting column Payee into corrected dataframe: {}", e));
+                }
+            };
+        }
+
+        //get description
+        {
+            //get owned date column
+            let description_column = match dataframe_column_search.get("Note") {
+                Some(val) => Series::new("Description", val.to_owned()),
+                None => {
+                    return Err("Could not find column Note in original dataframe".to_string());
+                }
+            };
+
+
+            match corrected_dataframe.insert_column(4, description_column) {
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Error inserting column Description into corrected dataframe: {}", e));
+                }
+            };
+        }
+
+        //remove rows if their amount is 0
+        {
+            //get amount column
+            let amount_column = match corrected_dataframe.column("Amount") {
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Could not find column Amount in corrected dataframe {}", e));
+                }
+            };
+
+            //get amount 32 chunked array references
+            let amount_f32 = match amount_column.f32() {
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Could not get f32 chunked array from column Amount: {}", e));
+                }
+            };
+
+            //get mask for amount == 0.0
+            let mask: ChunkedArray<BooleanType> = amount_f32.into_iter().map(|val| -> bool {
+                //handle amount is nil case
+                match val {
+                    Some(val) => {
+                        //if amount > 0, keep
+                        if val != 0.0 {
+                            return true 
+                        } 
+
+                        //else, get rid of 
+                        return false 
+                    }
+                    None => {
+                        return false 
+                    }
+                };
+            })
+            .collect();
+
+            corrected_dataframe = match corrected_dataframe.filter(&mask) {
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Could not filter corrected dataframe with amount > 0 mask: {}", e));
+                }
+            }; 
+        }
+
+        //get input file name
+        let file_name = match file_path.file_name() {
+            Some(val) => match val.to_str() {
+                Some(val) => val,
+                None => {
+                    return Err("Could not convert osstr to string".to_string());
+                }
+            },
+            None => {
+                return Err("Could not get file name from path buf".to_string());
+            }
+        };
+
         //create output file path
-        let mut output_file = get_output_file_buffer("output_file.csv".to_string())?; 
+        let mut output_file = get_output_file_buffer(file_name.to_string())?; 
 
         //build csv file writer
         let mut csv_writer = CsvWriter::new(&mut output_file)
-            .include_header(true)
-            .with_datetime_format(Some("".to_string()));
+            .include_header(true);
 
         //write csv file to output location
         match csv_writer.finish(&mut corrected_dataframe) {
@@ -311,29 +425,30 @@ fn get_output_file_buffer(output_file_name: String) -> Result<File, String> {
 }
 
 fn clean_amount_field(column: Series) -> Result<Series, String> {
+    //attempt getting string value from column, if we fail, attempt to cast to string 
+    let column = match column.str() {
+        Ok(_) => column,
+        Err(_) => {
+            match column.cast(&DataType::String) {
+                //extract str type from already cast to string column
+                Ok(some) => some,
+                Err(e) => {
+                    return Err(format!("Could not cast colum {} in an attempt to get a string column in the clean_amount_string method: {}", column.name(), e));
+                }
+            } 
+        }
+    };
+
+    //get underlying string represented data
+    let column_str = match column.str() {
+        Ok(some) => some,
+        Err(e) => {
+            return Err(format!("Could not extract already converted string value as ChunkedArray from Series in clean_amount_string method: {}", e));
+        }
+    };
+
     //Get rid of second space and dolar sign
     //Only keep first 10 slices of string
-    let column_str = match column 
-        //get column as str
-        .str() {
-            Ok(some) => some,
-            Err(_) => {
-                //if we could not extract column as ChunkedArray<StringType>, cast it to string type
-                match column.clone().cast(&DataType::String) {
-                    //extract str type from already cast to string column
-                    Ok(some) => match some.str() {
-                        Ok(some) => some,
-                        Err(e) => {
-                            return Err(format!("Could not extract already converted string value as ChunkedArray from Series in clean_amount_string method: {}", e));
-                        }
-                    },
-                    Err(e) => {
-                        return Err(format!("Could not cast colum {} in an attempt to get a string column in the clean_amount_string method: {}", column.name(), e));
-                    }
-                }
-            }
-        };
-
     let column_str = column_str
         .apply(|chunkedarray|
             {
@@ -366,3 +481,5 @@ fn clean_amount_field(column: Series) -> Result<Series, String> {
 //loads it into an in memory hash set AFTER reading new files, with capacity (existing + new dataset values)
 //update hash set with newly written out values AFTER new file outputed
 //save hashset back to csv file 
+
+//TODO clean up all error messages
