@@ -322,7 +322,7 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
             };
 
             //get amount 32 chunked array references
-            let amount_f32 = match amount_column.f32() {
+            let amount_f32: &ChunkedArray<Float32Type> = match amount_column.f32() {
                 Ok(some) => some,
                 Err(e) => {
                     return Err(format!("Could not get f32 chunked array from column Amount: {}", e));
@@ -475,11 +475,4 @@ fn clean_amount_field(column: Series) -> Result<Series, String> {
 }
 //TODO if directory does not exist, create it
 //TODO get rid of unwraps
-
-//IDEA for database
-//csv storing transaction ids
-//loads it into an in memory hash set AFTER reading new files, with capacity (existing + new dataset values)
-//update hash set with newly written out values AFTER new file outputed
-//save hashset back to csv file 
-
 //TODO clean up all error messages
