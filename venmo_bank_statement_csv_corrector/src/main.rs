@@ -1,5 +1,7 @@
 use std::env;
+use std::ffi::OsStr;
 use std::fmt::write;
+use std::iter::Filter;
 use std::process::Output;
 use std::collections::hash_map;
 use std::{fs::{File, read_dir}, io};
@@ -36,6 +38,23 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
         }
     };
 
+    // we do not want files that don't have a .csv extension
+    let input_files: Vec<&PathBuf> = input_files.iter().filter(|file| -> bool {
+        match file.extension() {
+            Some(ext) => {
+                if ext == OsStr::new("csv") {
+                    return true
+                }
+                else {
+                    return false
+                }
+            }
+            None => {
+                return false
+            }
+        };
+    }).collect();
+
     //list of parsed json file contents
     let dataframes: Vec<DataFrame> = Vec::with_capacity(input_files.len()); 
 
@@ -54,7 +73,7 @@ fn read_input_files() -> Result<Vec<DataFrame>, String>{
         };
 
         //parse csv file
-        let mut dataframe = match csv_reader.finish() {
+        let dataframe = match csv_reader.finish() {
             Ok(some) => some,
             Err(e) => {
                 return Err(format!("Error during parsing csv file with error {}", e.to_string()));
